@@ -1,0 +1,32 @@
+# Linux servers over SSH: one entry per server (a VPS, a cloud box, anything Hisho doesn't manage
+# as a fleet machine). Read-only: OS and uptime, disk and memory, pending updates, failed services,
+# every Docker container with its image (so app versions like Pangolin's show), and the health of
+# the websites it serves. Add asks for the host, user and key file, then pins the server's SSH host
+# key (shown in the result); a later change of that key stops Hisho instead of trusting it.
+name: server
+kind: integration
+title: Servers (SSH)
+description: "Your VPS and other servers over SSH: health, updates, containers, websites."
+version: 0.1.1
+you_need:
+  - "A Linux server you can reach over SSH (a VPS, a cloud box)"
+  - "An SSH key on the Core machine that logs in to it"
+provider: provider.py
+entry_label: server
+entry_schema:
+  host: str                # IP or name
+  user: str
+  port: "port?"            # default 22
+  key_file: "str?"         # private key on the Core machine, default ~/.ssh/id_ed25519
+  host_key: "str?"         # SHA256 fingerprint, pinned by Add / Test
+  sudo: "bool?"            # use sudo -n for docker and update checks
+  sites: "str?"            # websites it serves, comma-separated (https:// assumed)
+  note: "str?"
+entry_form:
+  host: "IP address or name"
+  user: "SSH user"
+  port: "Port (empty = 22)"
+  key_file: "SSH key on Kihon (empty = ~/.ssh/id_ed25519)"
+  sudo: "Use sudo for Docker and updates"
+  sites: "Websites it serves (comma-separated)"
+  note: "Note"
