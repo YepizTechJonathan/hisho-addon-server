@@ -1,15 +1,15 @@
-# Linux servers over SSH: one entry per server (a VPS, a cloud box, anything Hisho doesn't manage
-# as a fleet machine). Read-only: OS and uptime, disk and memory, pending updates, failed services,
+# Linux servers over SSH: one entry per server, at home or on the internet (a box on your network, a VPS, a cloud
+# server: anything Hisho doesn't manage as a fleet machine). Read-only: OS and uptime, disk and memory, pending updates, failed services,
 # every Docker container with its image (so app versions like Pangolin's show), and the health of
 # the websites it serves. Add asks for the host, user and key file, then pins the server's SSH host
 # key (shown in the result); a later change of that key stops Hisho instead of trusting it.
 name: server
 kind: integration
 title: Servers (SSH)
-description: "Your VPS and other servers over SSH: health, updates, containers, websites."
-version: 0.1.1
+description: "Any Linux server you reach over SSH, at home or on the internet: health, updates, containers, websites."
+version: 0.1.2
 you_need:
-  - "A Linux server you can reach over SSH (a VPS, a cloud box)"
+  - "A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)"
   - "An SSH key on the Core machine that logs in to it"
 provider: provider.py
 entry_label: server
@@ -26,7 +26,30 @@ entry_form:
   host: "IP address or name"
   user: "SSH user"
   port: "Port (empty = 22)"
-  key_file: "SSH key on Kihon (empty = ~/.ssh/id_ed25519)"
+  key_file: "SSH key on the Core machine (empty = ~/.ssh/id_ed25519)"
   sudo: "Use sudo for Docker and updates"
   sites: "Websites it serves (comma-separated)"
   note: "Note"
+
+help:
+  host:
+    label: Server address
+    say: "The server's IP address or name, like 203.0.113.10 or server.example.com. Any Linux server Hisho can reach over SSH counts, on your home network or on the internet. Your hosting company's control panel shows it."
+  user:
+    label: SSH user
+    say: "The user name Hisho logs in as. It only reads, so an ordinary user is enough; it does not need root."
+  port:
+    say: "The SSH port. Leave it empty for the usual 22."
+  key_file:
+    label: SSH key
+    say: "The private key file on the machine running Hisho Core that logs in to this server. Leave it empty for ~/.ssh/id_ed25519. Its public half must be on the server (ssh-copy-id puts it there)."
+    get: "https://www.ssh.com/academy/ssh/copy-id"
+    get_label: How to set up an SSH key
+  sudo:
+    label: Use sudo
+    say: "Turn on if this user needs sudo to run Docker or check updates. Hisho uses sudo -n, so the user must be allowed to without a password."
+  sites:
+    label: Websites it serves
+    say: "Web addresses this server hosts, separated by commas, like example.com, shop.example.com. Hisho checks each one is up."
+  note:
+    say: "Anything that helps you remember this server, like what runs on it."

@@ -2,7 +2,7 @@
 
 ## What it does
 
-Watches Linux servers over SSH that Hisho doesn't manage as fleet machines (a VPS, a cloud box),
+Watches Linux servers over SSH that Hisho doesn't manage as fleet machines, at home or on the internet (a home server, a VPS, a cloud box),
 read only: OS and uptime, disk and memory, pending updates, failed services, every Docker container
 with its image (so app versions show), and the health of the websites it serves. Its entries also
 feed Hisho's machine list (`hisho inventory`) and other add-ons (CrowdSec, UniFi exposure checks).
@@ -10,7 +10,7 @@ feed Hisho's machine list (`hisho inventory`) and other add-ons (CrowdSec, UniFi
 ## What it needs
 
 - You need:
-  - A Linux server you can reach over SSH (a VPS, a cloud box)
+  - A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)
   - An SSH key on the Core machine that logs in to it
 - Runs on: the Core machine, inside Hisho Core
 - One entry per server, each with:
