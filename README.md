@@ -22,6 +22,7 @@ feed Hisho's machine list (`hisho inventory`) and other add-ons (CrowdSec, UniFi
   - `sudo` (bool, optional)
   - `sites` (str, optional)
   - `note` (str, optional)
+  - `made` (map, optional)
 
 ## How to install
 
@@ -47,7 +48,8 @@ address. **Sign in once** asks for the server's address, a user and that user's 
 - pins the server's SSH host key (shown in the result);
 - logs in once with the password (through OpenSSH's askpass, never on a command line or in a file) and adds its
   public key to that user's `~/.ssh/authorized_keys` (once, folder 700 and file 600), limited to running
-  commands: no agent, port or X11 forwarding and no terminal;
+  commands: no agent, port or X11 forwarding and no terminal. The line ends with `hisho@<machine>`, the name of
+  the machine Hisho runs on, so you can tell which Hisho put it there; no other line is touched;
 - checks the key logs in on its own, then tests the server and saves it. The password is not kept.
 
 The user needs no root: Hisho only reads. Turn on **Use sudo** afterwards if Docker or the update check needs
@@ -57,9 +59,16 @@ The user needs no root: Hisho only reads. Turn on **Use sudo** afterwards if Doc
 half is already on the server. Either way, if the server's host key later changes, Hisho stops instead of
 trusting it. Entries are kept in `~/Hisho/System/Config/Addons/server.yaml`.
 
+**Remove from server** (on an entry whose key Sign in once put there; the entry remembers it as `made`, the key's
+SHA256 fingerprint) needs no password: Hisho logs in with its own key, after checking the pinned host key, and
+takes out only the `authorized_keys` lines that carry exactly its key. Every other line (yours, another Hisho's)
+stays, and the file keeps its owner and permissions. Hisho then checks its key no longer logs in and forgets the
+entry. A line that is already gone is said, not an error. If Hisho's key already logged in before Sign in once,
+Hisho did not add a line, and Remove from server is not offered.
+
 ## How to remove
 
-**Add-ons > Store > Servers (SSH) > Remove**, or `hisho addon remove server`. Its card and page go away; your settings stay in `~/Hisho/System/Config/Addons/server.yaml`, so installing it again picks up where you left off.
+**Add-ons > Store > Servers (SSH) > Remove**, or `hisho addon remove server`. Its card and page go away; your settings stay in `~/Hisho/System/Config/Addons/server.yaml`, so installing it again picks up where you left off. Hisho's key stays on the servers: press **Remove from server** on each entry first to take it out.
 
 ## License
 

@@ -4,13 +4,18 @@ Sign in once (``connect``): the owner types the server's address, a user and tha
 makes its own SSH key on the Core machine if it has none (``KEY_FILE``), pins the server's host key the way Add
 does, logs in once with the password (OpenSSH asks a tiny askpass script for it; the password travels in that
 one ssh process's environment, never on a command line, in a file or in a message) and adds Hisho's public key
-to that user's ``~/.ssh/authorized_keys``. Then it checks the key logs in on its own. The password is not kept.
+to that user's ``~/.ssh/authorized_keys`` (the line's comment is ``hisho@<this machine>``). Then it checks the key
+logs in on its own. The password is not kept. ``made`` in the entry records the key it put there.
+
+Remove from server (``disconnect``): logs in with Hisho's own key and deletes only the authorized_keys line that
+carries exactly Hisho's public key, leaving every other line (another Hisho's, yours) and the file's permissions.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -214,6 +219,29 @@ def _run(ctx: Any, cmd: list[str], timeout: int = 30, env: dict[str, str] | None
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env={**os.environ, **(env or {})})
 
 
+def _machine() -> str:
+    """This machine's name for the key's comment (lower-case letters, digits and dashes)."""
+    try:
+        from hisho import fleet_config
+        name = fleet_config.local_name()
+    except Exception:  # noqa: BLE001
+        name = socket.gethostname()
+    return re.sub(r"[^a-z0-9-]+", "-", str(name).split(".")[0].lower()).strip("-")[:40].strip("-") or "hisho"
+
+
+def key_fingerprint(pub: str) -> str:
+    """SHA256 fingerprint of a public key line, as ``ssh-keygen -l`` shows it."""
+    blob = base64.b64decode(pub.split()[1])
+    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+
+
+def authorized_line(pub: str) -> str:
+    """The authorized_keys line Hisho adds: its key, limited by KEY_OPTIONS, with the comment ``hisho@<machine>``
+    (so the owner can tell which Hisho put it there; the key file's own comment is left as it is)."""
+    kind, blob = pub.split()[:2]
+    return f"{KEY_OPTIONS} {kind} {blob} hisho@{_machine()}"
+
+
 def ensure_key(ctx: Any, key_file: str = KEY_FILE) -> str:
     """Hisho's public key line, making the ed25519 key pair first if there is none (no passphrase: Core uses it
     unattended; the private half stays on the Core machine, mode 600)."""
@@ -221,7 +249,7 @@ def ensure_key(ctx: Any, key_file: str = KEY_FILE) -> str:
     pub = key.with_name(key.name + ".pub")
     if not key.exists():
         key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        res = _run(ctx, ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"hisho@{socket.gethostname()}",
+        res = _run(ctx, ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"hisho@{_machine()}",
                          "-f", str(key)], timeout=30)
         if res.returncode != 0 or not key.exists():
             raise RuntimeError(f"couldn't make Hisho's SSH key {key_file}: {(res.stderr or '').strip()[-160:]}")
@@ -240,7 +268,7 @@ def connect_copy(ctx: Any) -> dict[str, str]:
     """For a server that takes only keys (AWS Lightsail, a droplet made with an SSH key): one line to paste in its
     browser console, putting Hisho's key on it. Then Sign in once needs no password."""
     pub = ensure_key(ctx, KEY_FILE)
-    line = f"{KEY_OPTIONS} {pub}"
+    line = authorized_line(pub)
     return {"label": "Hisho's key", "say": "For a server that takes only keys: paste this once in its console in the "
             "browser (it adds Hisho's key for that user), then leave the password empty below.",
             "copy": f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF '{pub.split()[1]}' ~/.ssh/authorized_keys 2>/dev/null "
@@ -249,15 +277,16 @@ def connect_copy(ctx: Any) -> dict[str, str]:
 
 def install_script(pub: str) -> str:
     """The one command run with the password: add Hisho's key to authorized_keys once (a key already there is
-    left alone), with the folder and file private as sshd wants them."""
+    left alone; HISHO_KEY_ADDED says it was added now), with the folder and file private as sshd wants them."""
     blob = pub.split()[1]
-    line = f"{KEY_OPTIONS} {pub}"
+    line = authorized_line(pub)
     return ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys"
             " && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
-            f" && if ! grep -qF {shlex.quote(blob)} ~/.ssh/authorized_keys; then"
+            f" && if [ \"$(awk -v b={shlex.quote(blob)} '{{for (i = 1; i <= NF; i++) if ($i == b) {{c++; break}}}}"
+            " END {print c + 0}' ~/.ssh/authorized_keys)\" -eq 0 ]; then"
             " if [ -s ~/.ssh/authorized_keys ] && [ -n \"$(tail -c 1 ~/.ssh/authorized_keys)\" ]; then"
             " echo >> ~/.ssh/authorized_keys; fi;"
-            f" printf '%s\\n' {shlex.quote(line)} >> ~/.ssh/authorized_keys; fi"
+            f" printf '%s\\n' {shlex.quote(line)} >> ~/.ssh/authorized_keys && echo HISHO_KEY_ADDED; fi"
             " && { command -v restorecon >/dev/null 2>&1 && restorecon -R ~/.ssh >/dev/null 2>&1; true; }"
             " && echo HISHO_KEY_OK")
 
@@ -319,7 +348,72 @@ def connect(values: dict[str, Any], ctx: Any) -> dict[str, Any]:
                                           "(does the server allow key logins? PubkeyAuthentication in sshd_config)"}
     port_part = "" if port == 22 else f" port {port}"
     say = "already logs in" if already else "is on the server now"
-    made = {"host": host, "user": user, "key_file": KEY_FILE, "host_key": fp, **({"port": port} if port != 22 else {})}
-    return {"ok": True, "entry": made,
+    out = {"host": host, "user": user, "key_file": KEY_FILE, "host_key": fp, **({"port": port} if port != 22 else {})}
+    if not already and "HISHO_KEY_ADDED" in (res.stdout or ""):
+        out["made"] = {"key": key_fingerprint(pub), "comment": f"hisho@{_machine()}"}     # for Remove from server
+    return {"ok": True, "entry": out,
             "message": f"Hisho's own SSH key {say} for {user}@{host}{port_part}; the password was used once and "
-                       f"not kept. Host key {fp} pinned."}
+                       f"not kept. Host key {fp} pinned."
+                       + (" Its line was there before, so Remove from server is not offered for it." if "made" not in out else "")}
+
+
+# ── Remove from server: take Hisho's own key line out again ──────────────
+
+def remove_script(pub: str) -> str:
+    """The one command run with Hisho's key: delete from ``~/.ssh/authorized_keys`` every line that carries exactly
+    Hisho's key (a whole field equal to its blob), keeping every other line. The file is rewritten in place (same
+    file, owner and permissions). Says HISHO_REMOVED <lines> and HISHO_GONE (or HISHO_STILL)."""
+    b = shlex.quote(pub.split()[1])
+    f = '"$HOME/.ssh/authorized_keys"'
+    count = f"awk -v b={b} '{{for (i = 1; i <= NF; i++) if ($i == b) {{c++; break}}}} END {{print c + 0}}' \"$f\""
+    return (f"f={f}; if [ ! -f \"$f\" ]; then echo HISHO_GONE; echo HISHO_REMOVED 0; exit 0; fi;"
+            f" n=$({count});"
+            " if [ \"$n\" -gt 0 ]; then t=$(mktemp \"$HOME/.ssh/.hisho-authorized_keys.XXXXXX\") || exit 1;"
+            f" awk -v b={b} '{{for (i = 1; i <= NF; i++) if ($i == b) next; print}}' \"$f\" > \"$t\""
+            " && cat \"$t\" > \"$f\"; r=$?; rm -f \"$t\"; [ $r -eq 0 ] || exit 1; fi;"
+            f" if [ \"$({count})\" -gt 0 ]; then echo HISHO_STILL; else echo HISHO_GONE; fi; echo HISHO_REMOVED $n")
+
+
+def _public(key_file: str, ctx: Any) -> str:
+    """The public half of Hisho's key (never makes one)."""
+    key = Path(key_file).expanduser()
+    pub = key.with_name(key.name + ".pub")
+    if pub.exists():
+        return pub.read_text().strip()
+    res = _run(ctx, ["ssh-keygen", "-y", "-f", str(key)], timeout=15) if key.exists() else None
+    if not res or res.returncode != 0 or not res.stdout.strip():
+        raise RuntimeError(f"Hisho's key {key_file} is not on this machine any more, so it can't log in to take "
+                           "its line out; remove it from the server's authorized_keys yourself")
+    return res.stdout.strip()
+
+
+def disconnect(entry: dict[str, Any], login: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    """Remove from server: log in with Hisho's own key (host key pinned) and delete only the authorized_keys line
+    with exactly that key, the one Sign in once put there (``made``). No login is asked: the key removes itself."""
+    made = entry.get("made") or {}
+    if not isinstance(made, dict) or not made.get("key"):
+        return {"ok": False, "error": "Hisho didn't put its key on this server by signing in once, so there is "
+                                      "nothing of Hisho's to remove; take the key out of authorized_keys yourself"}
+    pub = _public(str(entry.get("key_file") or KEY_FILE), ctx)
+    if key_fingerprint(pub) != made["key"]:
+        return {"ok": False, "error": f"Hisho's key file is not the key it put on {entry['host']} ({made['key']}), so "
+                                      "it removed nothing; take that key out of authorized_keys yourself"}
+    _trust(entry)
+    where = f"{entry['user']}@{entry['host']}"
+    res = _run(ctx, _ssh_args(entry) + [remove_script(pub)], timeout=30)
+    text = res.stdout or ""
+    if res.returncode != 0 or "HISHO_REMOVED" not in text:
+        err = (res.stderr or "").strip()[-200:]
+        if "permission denied" in err.lower():
+            return {"ok": True, "message": f"Hisho's key no longer logs in to {where}, so its line was already gone. "
+                                           "Nothing was changed there."}
+        return {"ok": False, "error": err or f"couldn't take Hisho's key out on {entry['host']}"}
+    n = int((re.search(r"HISHO_REMOVED (\d+)", text) or [0, "0"])[1])
+    if "HISHO_STILL" in text or _key_works(entry, ctx):
+        return {"ok": False, "error": f"Hisho took {n} line(s) out of {where}'s authorized_keys, but its key still "
+                                      "logs in (is it in another authorized keys file?); Hisho kept the entry"}
+    if not n:
+        return {"ok": True, "message": f"Hisho's key line was already gone from {where}'s authorized_keys. Nothing "
+                                       "else was changed."}
+    return {"ok": True, "message": f"Took Hisho's key ({made.get('comment') or made['key']}) out of {where}'s "
+                                   "authorized_keys; every other line is as it was, and Hisho's key no longer logs in."}

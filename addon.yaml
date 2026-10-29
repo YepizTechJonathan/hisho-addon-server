@@ -4,12 +4,13 @@
 # the websites it serves. Its page lists the SSH servers on your network (Use this); Sign in once asks for
 # the address, a user and that user's password, puts Hisho's own key on the server and forgets the password.
 # Add (every field by hand) takes a key file instead. Both pin the server's SSH host key (shown in the
-# result); a later change of that key stops Hisho instead of trusting it.
+# result); a later change of that key stops Hisho instead of trusting it. Remove from server (no login: Hisho's own
+# key) takes out only the authorized_keys line with exactly Hisho's key, the one Sign in once put there (entry field made).
 name: server
 kind: integration
 title: Servers (SSH)
 description: "Any Linux server you reach over SSH, on your network or on the internet (a VPS at DigitalOcean, IONOS, Hetzner...): health, updates, containers, websites."
-version: 0.2.1
+version: 0.3.0
 you_need:
   - "A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)"
   - "A user on it and that user's password (used once to put Hisho's own SSH key there), or an SSH key on the Core machine that already logs in"
@@ -24,6 +25,7 @@ entry_schema:
   sudo: "bool?"            # use sudo -n for docker and update checks
   sites: "str?"            # websites it serves, comma-separated (https:// assumed)
   note: "str?"
+  made: "map?"             # what Sign in once put there: {key: SHA256 fingerprint, comment: hisho@<machine>}, for Remove from server
 entry_form:
   host: "IP address or name"
   user: "SSH user"
@@ -76,6 +78,10 @@ connect:
       label: "That user's password"
       say: "Used once to put Hisho's key on the server. Leave it empty if Hisho's key already logs in."
       optional: true
+disconnect:                # Remove from server: provider.disconnect takes out Hisho's own authorized_keys line
+  label: Remove from server
+  say: "Hisho logs in with its own key once more and takes only its own line (its key, marked hisho@<this machine>) out of that user's authorized_keys. Every other line stays. No password needed."
+  fields: {}
 
 help:
   host:

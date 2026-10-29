@@ -141,8 +141,9 @@ def test_sign_in_once_through_core_keeps_no_password(addon, ssh_world, monkeypat
     assert "right-pass" not in Path(addons.config_path("server")).read_text()
 
 
-def test_the_install_command_adds_the_key_once_with_private_permissions(tmp_path, addon):
+def test_the_install_command_adds_the_key_once_with_private_permissions(tmp_path, addon, monkeypatch):
     mod = addons.provider(addon)
+    monkeypatch.setattr("hisho.fleet_config.local_name", lambda: "kihon")
     home = tmp_path / "remote-home"
     (home / ".ssh").mkdir(parents=True)
     (home / ".ssh" / "authorized_keys").write_text("ssh-ed25519 AAAAother someone")       # no newline at the end
@@ -151,7 +152,7 @@ def test_the_install_command_adds_the_key_once_with_private_permissions(tmp_path
         res = subprocess.run(["sh", "-c", script], capture_output=True, text=True, env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
         assert res.returncode == 0 and "HISHO_KEY_OK" in res.stdout, res.stderr
     lines = (home / ".ssh" / "authorized_keys").read_text().splitlines()
-    assert lines == ["ssh-ed25519 AAAAother someone", f"{mod.KEY_OPTIONS} {PUB}"]
+    assert lines == ["ssh-ed25519 AAAAother someone", f"{mod.KEY_OPTIONS} {PUB.rsplit(' ', 1)[0]} hisho@kihon"]
     assert oct((home / ".ssh").stat().st_mode & 0o777) == "0o700"
     assert oct((home / ".ssh" / "authorized_keys").stat().st_mode & 0o777) == "0o600"
 
@@ -174,3 +175,124 @@ def test_a_vps_has_its_providers_steps_and_hishos_key_for_key_only_servers(addon
     got = mod.connect_copy(None)
     assert "AAAAC3NzaTEST" in got["copy"] and "authorized_keys" in got["copy"] and "no-pty" in got["copy"]
     assert "private" not in got["copy"]
+
+
+# ── names carry this machine; Remove from server ──────────────────────────
+
+class RemoteSSH(FakeSSH):
+    """FakeSSH whose "server" is a folder: the commands Hisho sends really run there (``sh -c`` with HOME set to
+    it), so the authorized_keys file is real. No network and no real ssh."""
+
+    def __init__(self, home, password="right-pass"):
+        super().__init__(password)
+        self.home = home
+
+    @property
+    def key_on_server(self):
+        ak = self.home / ".ssh" / "authorized_keys"
+        return ak.exists() and any(PUB.split()[1] in l.split() for l in ak.read_text().splitlines())
+
+    @key_on_server.setter
+    def key_on_server(self, value):
+        pass
+
+    def sh(self, script):
+        return subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                              env={"HOME": str(self.home), "PATH": "/usr/bin:/bin"})
+
+    def run(self, cmd, timeout=30, env=None):
+        if cmd[0] == "ssh" and "BatchMode=no" in cmd:                # the password login runs the install
+            got = super().run(cmd, timeout, env)
+            if got.returncode:
+                return got
+            self.calls[-1] = (cmd, dict(env or {}))
+            return self.sh(cmd[-1])
+        if cmd[0] == "ssh" and "BatchMode=yes" in cmd and cmd[-1] != "true":
+            self.calls.append((cmd, dict(env or {})))
+            if not self.key_on_server:
+                return subprocess.CompletedProcess(cmd, 255, "", "admin@203.0.113.5: Permission denied (publickey).")
+            return self.sh(cmd[-1])
+        return super().run(cmd, timeout, env)
+
+
+OWNER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnerKey00000000000000000000000000000000000 me@laptop"
+LIVE = "no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILiveHishoKey000000000000000000000000000000 hisho@kihon"
+NEAR = f"ssh-ed25519 {PUB.split()[1]}X not-quite-hishos"                # a blob that only starts with Hisho's
+
+
+@pytest.fixture
+def remote(ssh_world, tmp_path, monkeypatch):
+    monkeypatch.setattr("hisho.fleet_config.local_name", lambda: "Test_Box")     # this machine: test-box
+    home = tmp_path / "remote-home"
+    (home / ".ssh").mkdir(parents=True, mode=0o700)
+    ak = home / ".ssh" / "authorized_keys"
+    ak.write_text("\n".join([OWNER, LIVE, NEAR]) + "\n")
+    ak.chmod(0o600)
+    return ssh_world, RemoteSSH(home), ak
+
+
+def test_the_line_hisho_adds_names_this_machine_and_made_records_it(remote):
+    mod, fake, ak = remote
+    out = mod.connect({"host": "203.0.113.5", "user": "admin", "password": "right-pass"}, fake)
+    assert out["ok"], out
+    lines = ak.read_text().splitlines()
+    assert lines[:3] == [OWNER, LIVE, NEAR]
+    assert lines[3] == f"{mod.KEY_OPTIONS} ssh-ed25519 {PUB.split()[1]} hisho@test-box"
+    assert out["entry"]["made"] == {"key": mod.key_fingerprint(PUB), "comment": "hisho@test-box"}
+    assert out["entry"]["made"]["key"].startswith("SHA256:") and PUB.split()[1] not in str(out["entry"]["made"])
+    pub = Path(mod.KEY_FILE).expanduser().with_name("hisho_servers_ed25519.pub")
+    assert pub.read_text().strip() == PUB                                   # the key file is left as it is
+
+
+def test_a_key_that_already_logs_in_records_nothing_to_remove(remote):
+    mod, fake, ak = remote
+    ak.write_text(ak.read_text() + f"{PUB}\n")                              # put there some other way
+    out = mod.connect({"host": "203.0.113.5", "user": "admin", "password": ""}, fake)
+    assert out["ok"] and "made" not in out["entry"] and "not offered" in out["message"]
+
+
+def test_remove_from_server_takes_out_only_hishos_line_and_keeps_permissions(remote):
+    mod, fake, ak = remote
+    entry = mod.connect({"host": "203.0.113.5", "user": "admin", "password": "right-pass"}, fake)["entry"]
+    ak.write_text(ak.read_text() + "# a note\n" + f"command=\"x y\" {PUB.split()[0]} {PUB.split()[1]} copy\n")
+    inode = ak.stat().st_ino
+    out = mod.disconnect(entry, {}, fake)
+    assert out["ok"], out
+    assert ak.read_text().splitlines() == [OWNER, LIVE, NEAR, "# a note"]
+    assert ak.stat().st_ino == inode and oct(ak.stat().st_mode & 0o777) == "0o600"
+    assert not list(ak.parent.glob(".hisho-*"))                              # no temp file left
+    assert "no longer logs in" in out["message"]
+    sent = [c for c, e in fake.calls if c[0] == "ssh" and "BatchMode=yes" in c and c[-1] != "true"]
+    assert len(sent) == 1 and "StrictHostKeyChecking=yes" in sent[0] and not [c for c, e in fake.calls[-3:] if "BatchMode=no" in c]
+    again = mod.disconnect(entry, {}, fake)                                  # gone already: fine, nothing changed
+    assert again["ok"] and "already gone" in again["message"]
+    assert ak.read_text().splitlines() == [OWNER, LIVE, NEAR, "# a note"]
+
+
+def test_remove_from_server_refuses_without_made_or_with_another_key(remote, monkeypatch, tmp_path):
+    mod, fake, ak = remote
+    entry = mod.connect({"host": "203.0.113.5", "user": "admin", "password": "right-pass"}, fake)["entry"]
+    before = ak.read_text()
+    assert not mod.disconnect({k: v for k, v in entry.items() if k != "made"}, {}, fake)["ok"]
+    other = {**entry, "made": {"key": "SHA256:someone-elses", "comment": "hisho@kihon"}}
+    got = mod.disconnect(other, {}, fake)
+    assert not got["ok"] and "removed nothing" in got["error"]
+    assert ak.read_text() == before
+    monkeypatch.setattr(mod, "scan_host_key", lambda host, port=22: ("x ssh-ed25519 AAAAother", "SHA256:changed"))
+    with pytest.raises(PermissionError):
+        mod.disconnect(entry, {}, fake)
+    assert ak.read_text() == before
+
+
+def test_remove_through_core_forgets_the_entry(addon, remote, monkeypatch):
+    from hisho import connect as core_connect
+    mod, fake, ak = remote
+    monkeypatch.setattr(addons.Context, "run", lambda self, cmd, timeout=30, env=None: fake.run(cmd, timeout, env))
+    monkeypatch.setattr(mod, "test", lambda entry, ctx: {"ok": True, "fill": {"host_key": "SHA256:pinned"}})
+    assert core_connect.connect(addon, "web1", {"host": "203.0.113.5", "user": "admin", "password": "right-pass"})["ok"]
+    assert addons.read_config("server")["entries"]["web1"]["made"]["comment"] == "hisho@test-box"
+    assert core_connect.view(addon)["disconnect"]["fields"] == {}
+    out = core_connect.disconnect(addon, "web1", {})
+    assert out["ok"], out
+    assert "web1" not in (addons.read_config("server").get("entries") or {})
+    assert ak.read_text().splitlines() == [OWNER, LIVE, NEAR]

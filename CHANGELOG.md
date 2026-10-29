@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- The authorized_keys line Sign in once adds (and the console line to paste) ends with `hisho@<machine>`, the
+  machine Hisho runs on (a key Hisho makes now gets that comment too; an existing key file is left as it is). The
+  entry records the key it added (`made`: its SHA256 fingerprint); nothing is recorded when Hisho's key was already
+  there.
+- Remove from server: no password; Hisho logs in with its own key (pinned host key) and takes out only the
+  authorized_keys lines that carry exactly its key, keeping every other line and the file's permissions, then
+  checks its key no longer logs in. An already-gone line is said, not an error. Then Hisho forgets the entry.
+
 ## 0.2.1
 
 - Add has two paths: On my network (found devices named and sorted: likely servers first; network gear, management boards and gadgets, and what Hisho already has, folded away) and a server on the internet: pick the provider (DigitalOcean, IONOS, Hetzner, Linode, Vultr, OVHcloud, AWS Lightsail, Other) for its steps and a link to where it shows the address and login.
