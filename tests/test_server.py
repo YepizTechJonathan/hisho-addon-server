@@ -154,3 +154,23 @@ def test_the_install_command_adds_the_key_once_with_private_permissions(tmp_path
     assert lines == ["ssh-ed25519 AAAAother someone", f"{mod.KEY_OPTIONS} {PUB}"]
     assert oct((home / ".ssh").stat().st_mode & 0o777) == "0o700"
     assert oct((home / ".ssh" / "authorized_keys").stat().st_mode & 0o777) == "0o600"
+
+
+
+def test_a_vps_has_its_providers_steps_and_hishos_key_for_key_only_servers(addon, tmp_path, monkeypatch):
+    """One Servers add-on for both: on your network (Found) and on the internet (a VPS provider's steps and link)."""
+    from hisho import connect as hconnect
+    places = hconnect.view(addon)["connect"]["places"]
+    names = [x["name"] for x in places]
+    assert names[0] == "DigitalOcean" and {"Hetzner", "Vultr", "AWS Lightsail"} <= set(names) and names[-1] == "Other"
+    assert all(x["get"].startswith("https://") for x in places if x["name"] != "Other")
+    import importlib.util, subprocess as sp
+    spec = importlib.util.spec_from_file_location("srv", Path(__file__).resolve().parents[1] / "provider.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    key = tmp_path / "k"
+    key.with_name("k.pub").write_text("ssh-ed25519 AAAAC3NzaTEST hisho@core\n")
+    key.write_text("private")
+    monkeypatch.setattr(mod, "KEY_FILE", str(key))
+    got = mod.connect_copy(None)
+    assert "AAAAC3NzaTEST" in got["copy"] and "authorized_keys" in got["copy"] and "no-pty" in got["copy"]
+    assert "private" not in got["copy"]

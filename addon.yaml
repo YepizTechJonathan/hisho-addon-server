@@ -8,8 +8,8 @@
 name: server
 kind: integration
 title: Servers (SSH)
-description: "Any Linux server you reach over SSH, at home or on the internet: health, updates, containers, websites."
-version: 0.2.0
+description: "Any Linux server you reach over SSH, on your network or on the internet (a VPS at DigitalOcean, IONOS, Hetzner...): health, updates, containers, websites."
+version: 0.2.1
 you_need:
   - "A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)"
   - "A user on it and that user's password (used once to put Hisho's own SSH key there), or an SSH key on the Core machine that already logs in"
@@ -34,11 +34,43 @@ entry_form:
   note: "Note"
 
 discover:
-  - {tcp: 22, banner: "SSH-", title: "SSH server at {ip}", fill: {host: "{ip}"}}
+  - {tcp: 22, banner: "SSH-", title: "SSH server at {ip}", fill: {host: "{ip}"}, describe: true}
 connect:
   label: Sign in once
   say: "Hisho logs in once with this password to put its own SSH key on the server, then uses only the key. The password is not kept."
   form: [host, user, port]
+  # a server on the internet: where each provider shows its address and login (steps and a link on Add)
+  places:
+  - name: DigitalOcean
+    say: 'Droplets lists each server''s IP address. User: root. The root password is in DigitalOcean''s email if you chose a password when you made it; if you chose an SSH key, open the droplet > Access > Launch Droplet Console and paste the command below there.'
+    get: https://cloud.digitalocean.com/droplets
+    get_label: Open your droplets
+  - name: IONOS
+    say: Servers & Cloud > your server shows its IP address, the user (root) and the first password (press Show).
+    get: https://my.ionos.com/server
+    get_label: Open your IONOS servers
+  - name: Hetzner
+    say: 'Your project > Servers shows the IP address. User: root. Hetzner emails the root password unless you chose an SSH key; then open the server''s Console (the >_ button) and paste the command below there.'
+    get: https://console.hetzner.cloud/projects
+    get_label: Open Hetzner Cloud
+  - name: Linode (Akamai)
+    say: 'Linodes lists the IP address. User: root, with the root password you chose when you made it (forgot it? the Linode''s Settings > Reset Root Password).'
+    get: https://cloud.linode.com/linodes
+    get_label: Open your Linodes
+  - name: Vultr
+    say: Products > your server > Overview shows the IP address, the user (root) and the password (the eye icon).
+    get: https://my.vultr.com/
+    get_label: Open Vultr
+  - name: OVHcloud
+    say: Bare Metal Cloud > Virtual private servers > your VPS shows the IP address. OVHcloud emails the user (often ubuntu or debian) and its password when the VPS is installed.
+    get: https://manager.eu.ovhcloud.com/
+    get_label: Open the OVHcloud Control Panel
+  - name: AWS Lightsail
+    say: 'Instances shows the public IP and the user (ubuntu, admin or bitnami). Lightsail takes only keys: open the instance > Connect using SSH (a terminal in the browser), paste the command below, then type the address and user here and leave the password empty.'
+    get: https://lightsail.aws.amazon.com/ls/webapp/home/instances
+    get_label: Open Lightsail instances
+  - name: Other
+    say: 'Your provider''s control panel shows the server''s IP address and how to sign in: a user and password, or a console in the browser. With only a browser console, paste the command below there and leave the password empty.'
   fields:
     password:
       label: "That user's password"

@@ -236,6 +236,17 @@ def ensure_key(ctx: Any, key_file: str = KEY_FILE) -> str:
     return line
 
 
+def connect_copy(ctx: Any) -> dict[str, str]:
+    """For a server that takes only keys (AWS Lightsail, a droplet made with an SSH key): one line to paste in its
+    browser console, putting Hisho's key on it. Then Sign in once needs no password."""
+    pub = ensure_key(ctx, KEY_FILE)
+    line = f"{KEY_OPTIONS} {pub}"
+    return {"label": "Hisho's key", "say": "For a server that takes only keys: paste this once in its console in the "
+            "browser (it adds Hisho's key for that user), then leave the password empty below.",
+            "copy": f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF '{pub.split()[1]}' ~/.ssh/authorized_keys 2>/dev/null "
+                    f"|| echo '{line}' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"}
+
+
 def install_script(pub: str) -> str:
     """The one command run with the password: add Hisho's key to authorized_keys once (a key already there is
     left alone), with the folder and file private as sshd wants them."""
