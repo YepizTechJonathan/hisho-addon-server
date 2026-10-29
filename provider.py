@@ -1,16 +1,30 @@
-"""Servers over SSH for Hisho (see addon.yaml). Runs inside Core. Read-only."""
+"""Servers over SSH for Hisho (see addon.yaml). Runs inside Core. Read-only.
+
+Sign in once (``connect``): the owner types the server's address, a user and that user's password, once. Hisho
+makes its own SSH key on the Core machine if it has none (``KEY_FILE``), pins the server's host key the way Add
+does, logs in once with the password (OpenSSH asks a tiny askpass script for it; the password travels in that
+one ssh process's environment, never on a command line, in a file or in a message) and adds Hisho's public key
+to that user's ``~/.ssh/authorized_keys``. Then it checks the key logs in on its own. The password is not kept.
+"""
 from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import shlex
+import socket
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 KNOWN_HOSTS = Path("~/.config/hisho/server-known_hosts").expanduser()
+#: Hisho's own key for servers, made by Sign in once (entries added by hand default to ~/.ssh/id_ed25519)
+KEY_FILE = "~/.ssh/hisho_servers_ed25519"
+#: what Hisho's key may do on a server it was put on: run commands, nothing forwarded, no terminal
+KEY_OPTIONS = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty"
 
 #: One round trip: each section starts with a marker line.
 PROBE = r"""
@@ -187,3 +201,114 @@ def test(entry: dict[str, Any], ctx: Any) -> dict[str, Any]:
 
 def act(entries: dict[str, dict[str, Any]], ctx: Any, entry: str, item: str, action: str) -> dict[str, Any]:
     return {"ok": False, "error": "this integration is read-only"}
+
+
+# ── sign in once ──────────────────────────────────────────────────────────
+
+_ASKPASS = "#!/bin/sh\nprintf '%s\\n' \"$HISHO_ASKPASS_SECRET\"\n"
+
+
+def _run(ctx: Any, cmd: list[str], timeout: int = 30, env: dict[str, str] | None = None) -> Any:
+    if ctx is not None and hasattr(ctx, "run"):
+        return ctx.run(cmd, timeout=timeout, env=env)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env={**os.environ, **(env or {})})
+
+
+def ensure_key(ctx: Any, key_file: str = KEY_FILE) -> str:
+    """Hisho's public key line, making the ed25519 key pair first if there is none (no passphrase: Core uses it
+    unattended; the private half stays on the Core machine, mode 600)."""
+    key = Path(key_file).expanduser()
+    pub = key.with_name(key.name + ".pub")
+    if not key.exists():
+        key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        res = _run(ctx, ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"hisho@{socket.gethostname()}",
+                         "-f", str(key)], timeout=30)
+        if res.returncode != 0 or not key.exists():
+            raise RuntimeError(f"couldn't make Hisho's SSH key {key_file}: {(res.stderr or '').strip()[-160:]}")
+    if not pub.exists():
+        res = _run(ctx, ["ssh-keygen", "-y", "-f", str(key)], timeout=15)
+        if res.returncode != 0 or not res.stdout.strip():
+            raise RuntimeError(f"couldn't read the public half of {key_file}")
+        pub.write_text(res.stdout.strip() + "\n")
+    line = pub.read_text().strip()
+    if len(line.split()) < 2 or not line.startswith("ssh-"):
+        raise RuntimeError(f"{pub} isn't an SSH public key")
+    return line
+
+
+def install_script(pub: str) -> str:
+    """The one command run with the password: add Hisho's key to authorized_keys once (a key already there is
+    left alone), with the folder and file private as sshd wants them."""
+    blob = pub.split()[1]
+    line = f"{KEY_OPTIONS} {pub}"
+    return ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys"
+            " && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+            f" && if ! grep -qF {shlex.quote(blob)} ~/.ssh/authorized_keys; then"
+            " if [ -s ~/.ssh/authorized_keys ] && [ -n \"$(tail -c 1 ~/.ssh/authorized_keys)\" ]; then"
+            " echo >> ~/.ssh/authorized_keys; fi;"
+            f" printf '%s\\n' {shlex.quote(line)} >> ~/.ssh/authorized_keys; fi"
+            " && { command -v restorecon >/dev/null 2>&1 && restorecon -R ~/.ssh >/dev/null 2>&1; true; }"
+            " && echo HISHO_KEY_OK")
+
+
+def _password_args(entry: dict[str, Any]) -> list[str]:
+    return ["ssh", "-T", "-o", "BatchMode=no", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes",
+            "-o", f"UserKnownHostsFile={KNOWN_HOSTS}", "-o", "PubkeyAuthentication=no",
+            "-o", "PreferredAuthentications=keyboard-interactive,password", "-o", "NumberOfPasswordPrompts=1",
+            "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
+            "-p", str(entry.get("port") or 22), f"{entry['user']}@{entry['host']}"]
+
+
+def _key_works(entry: dict[str, Any], ctx: Any) -> bool:
+    try:
+        res = _run(ctx, _ssh_args(entry) + ["true"], timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0
+
+
+def _with_password(entry: dict[str, Any], password: str, command: str, ctx: Any) -> Any:
+    """Run one command on the server, signing in with the password through SSH_ASKPASS (OpenSSH 8.4+)."""
+    with tempfile.TemporaryDirectory(prefix="hisho-askpass-") as tmp:
+        helper = Path(tmp) / "askpass"
+        helper.write_text(_ASKPASS)
+        helper.chmod(0o700)
+        env = {"SSH_ASKPASS": str(helper), "SSH_ASKPASS_REQUIRE": "force", "HISHO_ASKPASS_SECRET": password}
+        return _run(ctx, _password_args(entry) + [command], timeout=40, env=env)
+
+
+def connect(values: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    """Sign in once: put Hisho's own key on the server with the typed password, then use only the key."""
+    host, user = str(values.get("host") or "").strip(), str(values.get("user") or "").strip()
+    if not host or not user:
+        return {"ok": False, "error": "type the server's address and the user to log in as"}
+    port = int(values.get("port") or 22)
+    password = str(values.get("password") or "")
+    entry = {"host": host, "user": user, "port": port, "key_file": KEY_FILE}
+    pub = ensure_key(ctx)
+    _, fp = scan_host_key(host, port)
+    entry["host_key"] = fp
+    _trust(entry)
+    already = _key_works(entry, ctx)
+    if not already:
+        if not password:
+            return {"ok": False, "error": f"Hisho's key doesn't log in to {user}@{host} yet: type that user's "
+                                          "password so Hisho can put its key there"}
+        res = _with_password(entry, password, install_script(pub), ctx)
+        if res.returncode != 0 or "HISHO_KEY_OK" not in (res.stdout or ""):
+            err = (res.stderr or "").strip().replace(password, "***")[-200:]
+            if "permission denied" in err.lower():
+                return {"ok": False, "error": f"{host} refused the password for {user}: {err}",
+                        "explain": "The server answered, but it refused that user and password. Check both, and "
+                                   "that the server allows password logins (some allow only keys: then put "
+                                   "Hisho's key on it by hand, see the SSH key help)."}
+            return {"ok": False, "error": err or f"couldn't put Hisho's key on {host}"}
+        if not _key_works(entry, ctx):
+            return {"ok": False, "error": f"Hisho's key is on {host} now, but logging in with it still fails "
+                                          "(does the server allow key logins? PubkeyAuthentication in sshd_config)"}
+    port_part = "" if port == 22 else f" port {port}"
+    say = "already logs in" if already else "is on the server now"
+    made = {"host": host, "user": user, "key_file": KEY_FILE, "host_key": fp, **({"port": port} if port != 22 else {})}
+    return {"ok": True, "entry": made,
+            "message": f"Hisho's own SSH key {say} for {user}@{host}{port_part}; the password was used once and "
+                       f"not kept. Host key {fp} pinned."}

@@ -1,23 +1,25 @@
 # Linux servers over SSH: one entry per server, at home or on the internet (a box on your network, a VPS, a cloud
 # server: anything Hisho doesn't manage as a fleet machine). Read-only: OS and uptime, disk and memory, pending updates, failed services,
 # every Docker container with its image (so app versions like Pangolin's show), and the health of
-# the websites it serves. Add asks for the host, user and key file, then pins the server's SSH host
-# key (shown in the result); a later change of that key stops Hisho instead of trusting it.
+# the websites it serves. Its page lists the SSH servers on your network (Use this); Sign in once asks for
+# the address, a user and that user's password, puts Hisho's own key on the server and forgets the password.
+# Add (every field by hand) takes a key file instead. Both pin the server's SSH host key (shown in the
+# result); a later change of that key stops Hisho instead of trusting it.
 name: server
 kind: integration
 title: Servers (SSH)
 description: "Any Linux server you reach over SSH, at home or on the internet: health, updates, containers, websites."
-version: 0.1.2
+version: 0.2.0
 you_need:
   - "A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)"
-  - "An SSH key on the Core machine that logs in to it"
+  - "A user on it and that user's password (used once to put Hisho's own SSH key there), or an SSH key on the Core machine that already logs in"
 provider: provider.py
 entry_label: server
 entry_schema:
   host: str                # IP or name
   user: str
   port: "port?"            # default 22
-  key_file: "str?"         # private key on the Core machine, default ~/.ssh/id_ed25519
+  key_file: "str?"         # private key on the Core machine, default ~/.ssh/id_ed25519 (Sign in once: ~/.ssh/hisho_servers_ed25519)
   host_key: "str?"         # SHA256 fingerprint, pinned by Add / Test
   sudo: "bool?"            # use sudo -n for docker and update checks
   sites: "str?"            # websites it serves, comma-separated (https:// assumed)
@@ -31,18 +33,30 @@ entry_form:
   sites: "Websites it serves (comma-separated)"
   note: "Note"
 
+discover:
+  - {tcp: 22, banner: "SSH-", title: "SSH server at {ip}", fill: {host: "{ip}"}}
+connect:
+  label: Sign in once
+  say: "Hisho logs in once with this password to put its own SSH key on the server, then uses only the key. The password is not kept."
+  form: [host, user, port]
+  fields:
+    password:
+      label: "That user's password"
+      say: "Used once to put Hisho's key on the server. Leave it empty if Hisho's key already logs in."
+      optional: true
+
 help:
   host:
     label: Server address
     say: "The server's IP address or name, like 203.0.113.10 or server.example.com. Any Linux server Hisho can reach over SSH counts, on your home network or on the internet. Your hosting company's control panel shows it."
   user:
     label: SSH user
-    say: "The user name Hisho logs in as. It only reads, so an ordinary user is enough; it does not need root."
+    say: "The user name Hisho logs in as. It only reads, so an ordinary user is enough; it does not need root. With Sign in once, Hisho's key is added for this user only."
   port:
     say: "The SSH port. Leave it empty for the usual 22."
   key_file:
     label: SSH key
-    say: "The private key file on the machine running Hisho Core that logs in to this server. Leave it empty for ~/.ssh/id_ed25519. Its public half must be on the server (ssh-copy-id puts it there)."
+    say: "Only when you add a server by hand: the private key file on the machine running Hisho Core that logs in to this server. Leave it empty for ~/.ssh/id_ed25519. Its public half must be on the server (ssh-copy-id puts it there). Sign in once does this for you with Hisho's own key, ~/.ssh/hisho_servers_ed25519."
     get: "https://www.ssh.com/academy/ssh/copy-id"
     get_label: How to set up an SSH key
   sudo:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Find it: the page lists the SSH servers on your network (port 22 answering with an SSH banner); Use this fills in the address.
+- Sign in once: type the address, a user and its password once. Hisho makes its own key (`~/.ssh/hisho_servers_ed25519`) if it has none, pins the host key, puts its public key in that user's authorized_keys (no forwarding, no terminal) and from then on logs in only with the key. The password goes to ssh through askpass and is not kept.
+
 ## 0.1.2
 
 - Every field on its setup form says in plain words what it is, and links to where to get it (addon.yaml `help:`, shown by Hisho's dashboard).

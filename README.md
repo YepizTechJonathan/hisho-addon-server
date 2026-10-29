@@ -11,7 +11,7 @@ feed Hisho's machine list (`hisho inventory`) and other add-ons (CrowdSec, UniFi
 
 - You need:
   - A Linux server you can reach over SSH: on your home network or the internet (a home server, a VPS, a cloud box)
-  - An SSH key on the Core machine that logs in to it
+  - A user on it and that user's password (used once to put Hisho's own SSH key there), or an SSH key on the Core machine that already logs in
 - Runs on: the Core machine, inside Hisho Core
 - One entry per server, each with:
   - `host` (str, required)
@@ -40,10 +40,22 @@ Its card shows a server with low disk, failed services or a website down. Its pa
 
 ## Settings
 
-Add a server on its page: host, SSH user, port (22 if empty), the private key on the Core machine
-(`~/.ssh/id_ed25519` if empty), whether to use `sudo -n` for Docker and updates, and the websites
-it serves. Add pins the server's SSH host key (shown in the result); if that key later changes,
-Hisho stops instead of trusting it. Entries are kept in `~/Hisho/System/Config/Addons/server.yaml`.
+The page (**Add-ons > Servers (SSH)**) lists the SSH servers it finds on your network; **Use this** fills in the
+address. **Sign in once** asks for the server's address, a user and that user's password. Hisho then:
+
+- makes its own SSH key on the Core machine if it has none (`~/.ssh/hisho_servers_ed25519`, ed25519);
+- pins the server's SSH host key (shown in the result);
+- logs in once with the password (through OpenSSH's askpass, never on a command line or in a file) and adds its
+  public key to that user's `~/.ssh/authorized_keys` (once, folder 700 and file 600), limited to running
+  commands: no agent, port or X11 forwarding and no terminal;
+- checks the key logs in on its own, then tests the server and saves it. The password is not kept.
+
+The user needs no root: Hisho only reads. Turn on **Use sudo** afterwards if Docker or the update check needs
+`sudo -n` (passwordless) there. A server that allows only key logins can't take a password: add it by hand.
+
+**+ add by filling in every field yourself** takes a key file instead (`~/.ssh/id_ed25519` if empty) whose public
+half is already on the server. Either way, if the server's host key later changes, Hisho stops instead of
+trusting it. Entries are kept in `~/Hisho/System/Config/Addons/server.yaml`.
 
 ## How to remove
 
